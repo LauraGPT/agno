@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from agno.context.provider import Status
 
@@ -65,40 +65,28 @@ def validate_google_credentials(
     return Status(ok=False, detail=f"{provider_id} (oauth, not authenticated)")
 
 
-def _check_db_token(provider_id: str, auth: "AuthConfig", required_scopes: list[str] | None = None) -> Status | None:
+def _check_db_token(
+    provider_id: str,
+    auth: "AuthConfig",
+    required_scopes: list[str] | None = None,
+    user_id: str | None = None,
+) -> Status | None:
     """Check for valid token in DB. Returns Status if found, None to fall back to file."""
-    try:
-        from google.oauth2.credentials import Credentials
+    from agno.tools.google.auth.tokens import load_token_from_db
 
-        from agno.utils.encryption import decrypt_dict, is_encrypted
-
-        row = auth.db.get_auth_token("google", None, "google")
-        if not row:
-            return None
-
-        token_data = row.get("token_data")
-        if not token_data:
-            return None
-
-        if is_encrypted(token_data):
-            token_data = decrypt_dict(token_data, key=auth.token_encryption_key)
-
-        granted_scopes = row.get("granted_scopes") or []
-
-        # Check if granted scopes cover required scopes
-        if required_scopes:
-            granted_set = set(granted_scopes)
-            required_set = set(required_scopes)
-            if not required_set.issubset(granted_set):
-                missing = required_set - granted_set
-                return Status(ok=False, detail=f"{provider_id} (oauth/db, missing scopes: {', '.join(missing)})")
-
-        creds = Credentials.from_authorized_user_info(token_data, granted_scopes)
-
-        if creds.valid:
-            return Status(ok=True, detail=f"{provider_id} (oauth/db, valid)")
-        if creds.expired and creds.refresh_token:
-            return Status(ok=True, detail=f"{provider_id} (oauth/db, expired but refreshable)")
-        return Status(ok=False, detail=f"{provider_id} (oauth/db, token invalid)")
-    except Exception:
+    row, creds = load_token_from_db(auth.db, user_id, auth.token_encryption_key)
+    if not row or not creds:
         return None
+
+    # Check if granted scopes cover required scopes
+    if required_scopes:
+        granted = set(row.get("granted_scopes") or [])
+        if not set(required_scopes).issubset(granted):
+            missing = set(required_scopes) - granted
+            return Status(ok=False, detail=f"{provider_id} (oauth/db, missing scopes: {', '.join(missing)})")
+
+    if creds.valid:
+        return Status(ok=True, detail=f"{provider_id} (oauth/db, valid)")
+    if creds.expired and creds.refresh_token:
+        return Status(ok=True, detail=f"{provider_id} (oauth/db, expired but refreshable)")
+    return Status(ok=False, detail=f"{provider_id} (oauth/db, token invalid)")

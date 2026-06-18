@@ -17,7 +17,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agno.tools.google.auth import AuthConfig
-from agno.tools.google.base import DEFAULT_GOOGLE_API_TIMEOUT, GoogleToolkit
+from agno.tools.google.base import GoogleToolkit
+
+# Default timeout matches Google SDK (was 30s, now 120s)
+DEFAULT_GOOGLE_API_TIMEOUT = 120.0
 from agno.tools.google.calendar import GoogleCalendarTools
 from agno.tools.google.drive import GoogleDriveTools
 from agno.tools.google.gmail import GmailTools
@@ -257,6 +260,7 @@ class TestNoDirectTransportConstruction:
     def google_tools_dir(self):
         # Navigate from test file to google tools directory
         import agno.tools.google.drive as drive_mod
+
         return Path(drive_mod.__file__).parent
 
     def test_drive_does_not_import_httplib2_or_authorized_http(self, google_tools_dir):

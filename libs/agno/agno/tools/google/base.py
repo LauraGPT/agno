@@ -8,9 +8,6 @@ from agno.utils.log import log_debug, log_warning
 if TYPE_CHECKING:
     from agno.tools.google.auth import AuthConfig
 
-# Default HTTP timeout for Google API calls (seconds)
-DEFAULT_GOOGLE_API_TIMEOUT = 30
-
 
 class GoogleToolkit(Toolkit):
     """Base class for Google Workspace API toolkits."""
@@ -106,22 +103,16 @@ class GoogleToolkit(Toolkit):
         return self._build_google_service(self.api_name, self.api_version, creds)
 
     def _get_http_timeout(self) -> float:
-        """Get HTTP timeout from AuthConfig, env, or default.
-
-        Priority: auth.http_timeout > GOOGLE_API_TIMEOUT env > 30s default
-        """
-        # 1. Check AuthConfig
+        """Get HTTP timeout from AuthConfig, env, or default (120s matches Google SDK)."""
         if self._auth and self._auth.http_timeout is not None:
             return self._auth.http_timeout
-        # 2. Check env var
         env_timeout = os.getenv("GOOGLE_API_TIMEOUT")
         if env_timeout:
             try:
                 return float(env_timeout)
             except (TypeError, ValueError):
                 pass
-        # 3. Default
-        return DEFAULT_GOOGLE_API_TIMEOUT
+        return 120.0
 
     def _make_auth_request(self) -> Any:
         """Create Request for credential refresh operations.
@@ -181,57 +172,6 @@ class GoogleToolkit(Toolkit):
             return False
         return True
 
-    def _load_from_db(self, db: Any, user_id: Optional[str]) -> Any:
-        """Load credentials from DB, refresh if expired, return if valid."""
-        from google.oauth2.credentials import Credentials
-
-        from agno.utils.encryption import decrypt_dict, is_encrypted
-
-        # 1. Fetch token from DB
-        try:
-            row = db.get_auth_token("google", user_id, "google")
-        except NotImplementedError:
-            log_warning(f"Database does not support auth token storage. Falling back to file-based auth.")
-            return None
-        except Exception as e:
-            log_debug(f"DB lookup failed: {e}")
-            return None
-        if not row:
-            return None
-
-        # 2. Verify stored token has required scopes
-        granted = set(row.get("granted_scopes") or [])
-        required = set(self.scopes)
-        if required and not required.issubset(granted):
-            missing = required - granted
-            log_warning(
-                f"{self.google_service_name.title()} DB token missing scopes: {', '.join(missing)}. "
-                "Re-authenticating with broader scopes."
-            )
-            return None
-
-        # 3. Decrypt and build credentials object
-        try:
-            token_data = row["token_data"]
-            if is_encrypted(token_data):
-                key = getattr(self._auth, "token_encryption_key", None)
-                token_data = decrypt_dict(token_data, key=key)
-            effective_scopes = row.get("granted_scopes") or self.scopes
-            creds = Credentials.from_authorized_user_info(token_data, effective_scopes)
-        except (ValueError, KeyError, ImportError):
-            return None
-
-        # 4. Refresh if expired
-        if creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(self._make_auth_request())
-                self._save_to_db(db, creds, user_id)
-            except Exception:
-                log_debug(f"Failed to refresh {self.google_service_name} token")
-
-        # 5. Return creds only if valid
-        return creds if creds.valid else None
-
     def _resolve_creds(self) -> Any:
         """Resolve credentials using the priority chain. Returns credentials.
 
@@ -261,16 +201,41 @@ class GoogleToolkit(Toolkit):
 
         # Use aggregated scopes from GoogleAuth if available
         oauth_scopes = self._auth.scopes
-
-        # 4. DB lookup (if configured via auth.db)
         db = self._auth.db
         user_id = getattr(getattr(self, "_run_context", None), "user_id", None)
+
+        # 4. DB lookup (if configured via auth.db)
         if db:
-            creds = self._load_from_db(db, user_id=user_id)
-            if creds:
-                if self._auth:
-                    self._auth.creds = creds
-                return creds
+            from agno.tools.google.auth.tokens import load_token_from_db, save_token_to_db
+
+            row, creds = load_token_from_db(db, user_id, self._auth.token_encryption_key)
+            if row and creds:
+                # Scope check
+                granted = set(row.get("granted_scopes") or [])
+                if not self.scopes or set(self.scopes).issubset(granted):
+                    # Refresh if expired
+                    if creds.expired and creds.refresh_token:
+                        try:
+                            creds.refresh(self._make_auth_request())
+                            save_token_to_db(
+                                db,
+                                creds,
+                                user_id,
+                                list(creds.scopes or self._auth.scopes),
+                                self._auth.token_encryption_key,
+                            )
+                        except Exception:
+                            log_debug(f"Failed to refresh {self.google_service_name} token")
+                    if creds.valid:
+                        if self._auth:
+                            self._auth.creds = creds
+                        return creds
+                else:
+                    missing = set(self.scopes) - granted
+                    log_warning(
+                        f"{self.google_service_name.title()} DB token missing scopes: {', '.join(missing)}. "
+                        "Re-authenticating with broader scopes."
+                    )
 
         # 5. File fallback (local mode)
         token_file = Path(self.token_path or "token.json")
@@ -336,7 +301,11 @@ class GoogleToolkit(Toolkit):
         # Save to DB or file, then cache on GoogleAuth
         if creds and creds.valid:
             if db:
-                self._save_to_db(db, creds, user_id=user_id)
+                from agno.tools.google.auth.tokens import save_token_to_db
+
+                save_token_to_db(
+                    db, creds, user_id, list(creds.scopes or oauth_scopes), self._auth.token_encryption_key
+                )
             else:
                 token_file.write_text(creds.to_json())
                 log_debug(f"{self.google_service_name.title()} credentials saved to file")
@@ -344,41 +313,3 @@ class GoogleToolkit(Toolkit):
                 self._auth.creds = creds
 
         return creds
-
-    def _save_to_db(self, db: Any, creds: Any, user_id: Optional[str]) -> bool:
-        """Save credentials to DB."""
-        from agno.utils.encryption import encrypt_dict
-
-        token_data = {
-            "token": creds.token,
-            "refresh_token": creds.refresh_token,
-            "token_uri": creds.token_uri,
-            "client_id": creds.client_id,
-            "client_secret": creds.client_secret,
-        }
-
-        # Encrypt if key provided
-        key = getattr(self._auth, "token_encryption_key", None)
-        if key:
-            token_data = encrypt_dict(token_data, key=key)
-        else:
-            log_warning(
-                f"Saving {self.google_service_name.title()} token without encryption. "
-                "Set AGNO_ENCRYPTION_KEY or auth.token_encryption_key for production use."
-            )
-
-        try:
-            db.upsert_auth_token(
-                {
-                    "provider": "google",
-                    "user_id": user_id,
-                    "service": "google",
-                    "token_data": token_data,
-                    "granted_scopes": list(creds.scopes) if creds.scopes else self._auth.scopes,
-                }
-            )
-            log_debug(f"{self.google_service_name.title()} credentials saved to DB")
-            return True
-        except Exception as e:
-            log_debug(f"Failed to save credentials to DB: {e}")
-            return False
