@@ -10,22 +10,20 @@ Verifies:
 """
 
 import ast
-import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from agno.tools.google.auth import AuthConfig
-from agno.tools.google.base import GoogleToolkit
-
-# Default timeout matches Google SDK (was 30s, now 120s)
-DEFAULT_GOOGLE_API_TIMEOUT = 120.0
 from agno.tools.google.calendar import GoogleCalendarTools
 from agno.tools.google.drive import GoogleDriveTools
 from agno.tools.google.gmail import GmailTools
 from agno.tools.google.sheets import GoogleSheetsTools
 from agno.tools.google.slides import GoogleSlidesTools
+
+# Default timeout matches Google SDK (was 30s, now 120s)
+DEFAULT_GOOGLE_API_TIMEOUT = 120.0
 
 
 @pytest.fixture
@@ -123,7 +121,7 @@ class TestDriveBuildService:
         tools = GoogleDriveTools(quota_project_id="billing-proj")
 
         with (
-            patch("httplib2.Http") as mock_httplib2,
+            patch("httplib2.Http"),
             patch("google_auth_httplib2.AuthorizedHttp") as mock_auth_http,
             patch("googleapiclient.discovery.build"),
         ):

@@ -10,8 +10,6 @@ Tests verify:
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,7 +18,9 @@ from agno.context.calendar import GoogleCalendarContextProvider
 from agno.context.gmail import GmailContextProvider
 from agno.context.mode import ContextMode
 from agno.tools.google.auth import AuthConfig
-from agno.tools.google.base import DEFAULT_GOOGLE_API_TIMEOUT
+
+# Default timeout matches Google SDK (120s)
+DEFAULT_GOOGLE_API_TIMEOUT = 120.0
 
 
 @pytest.fixture(autouse=True)
@@ -207,11 +207,11 @@ class TestSharedAuthConfig:
 
         # Create Gmail provider (registers Gmail scopes)
         gmail = GmailContextProvider(auth=auth)
-        gmail_toolkit = gmail._build_read_toolkit()
+        gmail._build_read_toolkit()
 
         # Create Calendar provider (registers Calendar scopes)
         calendar = GoogleCalendarContextProvider(auth=auth)
-        calendar_toolkit = calendar._build_read_toolkit()
+        calendar._build_read_toolkit()
 
         # Auth config should have scopes from both
         all_scopes = auth.scopes
