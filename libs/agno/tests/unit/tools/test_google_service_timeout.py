@@ -226,7 +226,8 @@ class TestSheetsDuplicateTimeout:
     def test_duplicate_builds_drive_service_with_helper(self, mock_valid_creds):
         tools = GoogleSheetsTools()
         tools.creds = mock_valid_creds
-        tools.scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        # Include drive scope to avoid triggering _resolve_creds() re-auth
+        tools.scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
         mock_sheets_service = MagicMock()
         mock_sheets_service.spreadsheets.return_value.get.return_value.execute.return_value = {

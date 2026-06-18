@@ -39,6 +39,8 @@ def sheets_tools(mock_credentials, mock_sheets_service):
         mock_build.return_value = mock_sheets_service
         tools = GoogleSheetsTools(creds=mock_credentials)
         tools._service = mock_sheets_service
+        # Include drive scope to avoid _resolve_creds() re-auth in create_duplicate_sheet
+        tools.scopes.append("https://www.googleapis.com/auth/drive")
         return tools
 
 

@@ -177,8 +177,15 @@ def test_auth_with_custom_paths():
     custom_creds_path = "custom_creds.json"
     custom_token_path = "custom_token.json"
 
+    # Create mock with all required Gmail scopes to pass _has_required_scopes check
+    gmail_scopes = [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.compose",
+        "https://www.googleapis.com/auth/gmail.modify",
+    ]
     mock_loaded_creds = MagicMock(spec=Credentials)
     mock_loaded_creds.valid = True
+    mock_loaded_creds.scopes = gmail_scopes
     mock_loaded_creds.to_json.return_value = '{"token": "test"}'
 
     with patch("pathlib.Path.exists", return_value=True):
